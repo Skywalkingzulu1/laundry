@@ -56,22 +56,22 @@
             <div class="right-side">
                 <div class="topic-text">Schedule pick up</div>
                 <p>Please give us your preffered time for pick up and your reference</p>
-                <form action="#">
+                <form name laundry action="#" method="post" netlify>
                     <div class="input-box">
-                        <input type="text" placeholder="Enter your name">
+                        <input name="Name" type="text" placeholder="Enter your name">
                     </div>
                     <div class="input-box">
-                        <input type="text" placeholder="cell phone number">
+                        <input name="number" id="number" type="text" placeholder="cell phone number">
                     </div>
 
                     <div>
-                        <input type="datetime-local" value="2023-06-01" />  
+                        <input name="drop-date" type="datetime-local" value="2023-06-01" />  
                     </div>
                     <div class="input-box message-box">
-                        <textarea name="message" cols="30" rows="10" placeholder="Collection Address"></textarea>
+                        <textarea name="address" cols="30" rows="10" placeholder="Collection Address"></textarea>
                     </div>
                     <div>
-                        <p> When should laundry be returned </p> <input type="datetime-local" value="2023-06-01" />
+                        <p> When should laundry be returned </p> <input name="collect-date" type="datetime-local" value="2023-06-01" />
                     </div>
                     <div class="button">
                         <input type="submit" value="Send Now">

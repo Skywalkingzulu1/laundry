@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> Best Laundry Services</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="toggle.css">
+
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat+Alternates&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css"
+        integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"
+        integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN"
+        crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"
+        integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q"
+        crossorigin="anonymous"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"
+        integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl"
+        crossorigin="anonymous"></script>
+</head>
+
+<body>
+    <section class="diamond">
+        <nav id="navbar">
+        </nav>
+    </section>
+
+    <section id="body-text">
+        <p>all your laundry solutions <br><span class="text-det">at one place.</span></p>
+    </section>
+
+    <!-- this is for arrow down effect -->
+    <div class="arrow">
+        <a href="#choice">
+            <span></span>
+            <span></span>
+            <span></span>
+        </a>
+    </div>
+
+    <section id="choice">
+        <div class="choice-box">
+            <div class="partner-box">
+                <p><a href="contact.html">Schedule Pick up</a></p>
+            </div>
+            <div class="customer-box">
+                <p><a href="#">Our Services.</a></p>
+            </div>
+        </div> 
+    </section> 
+
+    <section class="colored-section" id="testimonials" hidden>
+
+        <div id="testimonial-carousel" class="carousel slide" data-ride="carousel" data-interval="3500"
+            data-pause="hover">
+            <div class="carousel-inner">
+                <div class="carousel-item active container-fluid">
+                    <h2 class="testimonial-text">Lorem ipsum dolor, sit amet consectetur adipisicing elit. Iusto, excepturi!</h2>
+                    <img class="testimonial-image" src="images/dog-img.jpg" alt="dog-profile">
+                    <em>Pebbles, New York</em> 
+                </div>
+                <div class="carousel-item container-fluid">
+                    <h2 class="testimonial-text">Lorem ipsum dolor sit amet consectetur adipisicing elit. Nihil, sunt?</h2>
+                    <img class="testimonial-image" src="images/lady-img.jpg" alt="lady-profile">
+                    <em>Beverly, Illinois</em>
+                </div>
+            </div>
+            <a class="carousel-control-prev" href="#testimonial-carousel" role="button" data-slide="prev">
+                <span class="carousel-control-prev-icon"></span>
+            </a>
+            <a class="carousel-control-next" href="#testimonial-carousel" role="button" data-slide="next">
+                <span class="carousel-control-next-icon"></span>
+            </a>
+        </div>
+
+    </section>
+
+    <!-- this is used to add the diamond design for navbar and footers -->
+    <section class="diamond">
+        <h2>Join us today</h2>
+        <h3>Get the best services</h3>
+            <a href="aboutus.html"><button class="btn btn-primary">learn more</button></a>
+    </section>
+
+    <!-- this is used to give the cards a tilt effect  -->
+    <script type="text/javascript" src="vanilla-tilt.js"></script>
+    <script>
+        VanillaTilt.init(document.querySelector(".partner-box"), {
+            max: 30,
+            speed: 2500
+        });
+        VanillaTilt.init(document.querySelector(".customer-box"), {
+            max: 30,
+            speed: 2500
+        });
+    </script>
+
+    <!-- this is used for adding a toggle button for navigation -->
+    <section class="toggle">
+        <input type="checkbox" id="myInput">
+        <label for="myInput" class="toggle-pos">
+            <span class="bar top"></span>
+            <span class="bar middle"></span>
+            <span class="bar bottom"></span>
+        </label>
+        <aside>
+            <div class="aside-section aside-left">
+                <div class="aside-content">
+                    <ul class="aside-list">
+                        <li><a href="home.html" class="aside-anchor">Home</a></li>
+                        <li><a href="#" class="aside-anchor">Pick up</a></li>
+                        
+                    </ul>
+                </div>
+            </div>
+        </aside>
+    </section>
+
+    <div class="bubbles">
+        <img src="image/bubble.png">
+        <img src="image/bubble.png">
+        <img src="image/bubble.png">
+        <img src="image/bubble.png">
+        <img src="image/bubble.png">
+        <img src="image/bubble.png">
+        <img src="image/bubble.png">
+    </div>
+</body>
+
+</html>

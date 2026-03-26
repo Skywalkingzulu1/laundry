@@ -11,9 +11,16 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 _fake_user_db = {}
 
 def get_user(email: str) -> User:
+    """
+    Retrieve a user from the in‑memory store.
+    The stored dict contains a hashed_password field which is not part of the
+    public User model, so we strip it out before constructing the User instance.
+    """
     user_dict = _fake_user_db.get(email)
     if user_dict:
-        return User(**user_dict)
+        # Create a copy without the password hash for the Pydantic model
+        public_user_data = {k: v for k, v in user_dict.items() if k != "hashed_password"}
+        return User(**public_user_data)
     return None
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:

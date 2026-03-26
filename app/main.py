@@ -1,4 +1,9 @@
 from fastapi import FastAPI
+from dotenv import load_dotenv
+
+# Load environment variables from a .env file if present
+load_dotenv()
+
 from app.routers import users, bookings, payments
 
 app = FastAPI(title="LaundryPool API")

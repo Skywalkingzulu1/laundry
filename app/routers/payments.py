@@ -1,12 +1,13 @@
 import os
 import logging
+import json
 from typing import Any, Dict
 
 import stripe
-from fastapi import APIRouter, HTTPException, Request, Depends, status, Response
+from fastapi import APIRouter, HTTPException, Request, Depends, status
 from pydantic import BaseModel, PositiveInt
 
-from app.dependencies import get_current_user, role_required
+from app.dependencies import role_required
 from app.models import User
 
 # Configure logging
@@ -38,7 +39,7 @@ class PaymentIntentResponse(BaseModel):
 @router.post("/create-payment-intent", response_model=PaymentIntentResponse)
 async def create_payment_intent(
     payload: CreatePaymentIntentRequest,
-    current_user: User = Depends(role_required("customer"))
+    current_user: User = Depends(role_required("customer")),
 ):
     """
     Create a Stripe PaymentIntent and return its client_secret so the frontend can
@@ -67,13 +68,60 @@ async def create_payment_intent(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+class CreateCheckoutSessionRequest(BaseModel):
+    amount: PositiveInt
+    currency: str = "usd"
+    success_url: str
+    cancel_url: str
+    metadata: Dict[str, Any] = {}
+
+
+class CheckoutSessionResponse(BaseModel):
+    url: str
+
+
+@router.post("/create-checkout-session", response_model=CheckoutSessionResponse)
+async def create_checkout_session(
+    payload: CreateCheckoutSessionRequest,
+    current_user: User = Depends(role_required("customer")),
+):
+    """
+    Create a Stripe Checkout Session and return the URL to redirect the customer.
+    """
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": payload.currency,
+                        "product_data": {"name": "Laundry Service"},
+                        "unit_amount": payload.amount,
+                    },
+                    "quantity": 1,
+                }
+            ],
+            mode="payment",
+            success_url=payload.success_url,
+            cancel_url=payload.cancel_url,
+            metadata=payload.metadata,
+        )
+        logger.info(
+            "Created Checkout Session %s for user %s", session.id, current_user.email
+        )
+        return CheckoutSessionResponse(url=session.url)
+    except Exception as exc:
+        logger.exception("Error creating Checkout Session: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
     """
     Stripe webhook endpoint to receive asynchronous events such as payment confirmation.
 
     The endpoint validates the Stripe signature, parses the event, and processes
-    relevant event types (e.g., `payment_intent.succeeded`). After handling the
+    relevant event types (e.g., `checkout.session.completed`). After handling the
     event, it returns a 200 response to acknowledge receipt.
     """
     payload = await request.body()
@@ -84,15 +132,9 @@ async def stripe_webhook(request: Request):
         logger.error("STRIPE_WEBHOOK_SECRET not set in environment")
         raise HTTPException(status_code=500, detail="Webhook secret not configured")
 
-    if sig_header is None:
-        logger.error("Missing Stripe signature header")
-        raise HTTPException(status_code=400, detail="Missing Stripe signature header")
-
     try:
         event = stripe.Webhook.construct_event(
-            payload=payload,
-            sig_header=sig_header,
-            secret=webhook_secret,
+            payload, sig_header, webhook_secret
         )
     except ValueError as e:
         # Invalid payload
@@ -100,31 +142,26 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid payload")
     except stripe.error.SignatureVerificationError as e:
         # Invalid signature
-        logger.exception("Invalid Stripe signature")
+        logger.exception("Invalid signature")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     # Handle the event
-    logger.info("Received Stripe event: %s", event["type"])
-
-    if event["type"] == "payment_intent.succeeded":
-        payment_intent = event["data"]["object"]
-        # Example: you could retrieve booking_id from metadata if you stored it
-        booking_id = payment_intent.get("metadata", {}).get("booking_id")
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
         logger.info(
-            "PaymentIntent succeeded: %s (amount: %s, booking_id: %s)",
-            payment_intent["id"],
-            payment_intent["amount"],
-            booking_id,
+            "Checkout session completed: %s, customer %s, amount_total %s",
+            session.get("id"),
+            session.get("customer_email"),
+            session.get("amount_total"),
         )
-        # TODO: Update booking status in your database to 'paid' using booking_id
-    elif event["type"] == "payment_intent.payment_failed":
-        payment_intent = event["data"]["object"]
-        logger.warning(
-            "PaymentIntent failed: %s (amount: %s)",
-            payment_intent["id"],
-            payment_intent["amount"],
+        # TODO: Update booking/payment status in database
+    elif event["type"] == "payment_intent.succeeded":
+        intent = event["data"]["object"]
+        logger.info(
+            "PaymentIntent succeeded: %s, amount %s", intent.get("id"), intent.get("amount")
         )
-        # TODO: Handle failed payment (e.g., notify user)
+        # TODO: Update booking/payment status in database
+    else:
+        logger.info("Unhandled event type %s", event["type"])
 
-    # Return a 200 response to acknowledge receipt of the event
-    return Response(status_code=status.HTTP_200_OK)
+    return {"status": "success"}

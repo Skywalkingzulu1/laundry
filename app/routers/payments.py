@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict
 
 import stripe
-from fastapi import APIRouter, HTTPException, Request, Depends, status
+from fastapi import APIRouter, HTTPException, Request, Depends, status, Response
 from pydantic import BaseModel, PositiveInt
 
 from app.dependencies import get_current_user, role_required
@@ -22,6 +22,7 @@ if not stripe_api_key:
     stripe_api_key = "sk_test_123"
 stripe.api_key = stripe_api_key
 
+
 class CreatePaymentIntentRequest(BaseModel):
     amount: PositiveInt  # amount in the smallest currency unit (e.g., cents)
     currency: str = "usd"
@@ -29,8 +30,10 @@ class CreatePaymentIntentRequest(BaseModel):
     # Optional booking reference to associate the payment with a booking
     booking_id: str | None = None
 
+
 class PaymentIntentResponse(BaseModel):
     client_secret: str
+
 
 @router.post("/create-payment-intent", response_model=PaymentIntentResponse)
 async def create_payment_intent(
@@ -63,9 +66,11 @@ async def create_payment_intent(
         logger.exception("Error creating PaymentIntent: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc))
 
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
-    """Stripe webhook endpoint to receive asynchronous events such as payment confirmation.
+    """
+    Stripe webhook endpoint to receive asynchronous events such as payment confirmation.
 
     The endpoint validates the Stripe signature, parses the event, and processes
     relevant event types (e.g., `payment_intent.succeeded`). After handling the
@@ -79,44 +84,47 @@ async def stripe_webhook(request: Request):
         logger.error("STRIPE_WEBHOOK_SECRET not set in environment")
         raise HTTPException(status_code=500, detail="Webhook secret not configured")
 
-    if not sig_header:
-        logger.warning("Missing Stripe signature header")
+    if sig_header is None:
+        logger.error("Missing Stripe signature header")
         raise HTTPException(status_code=400, detail="Missing Stripe signature header")
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except stripe.error.SignatureVerificationError:
-        logger.warning("Invalid Stripe webhook signature")
-        raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature")
-    except Exception as exc:
-        logger.exception("Error constructing Stripe webhook event: %s", exc)
-        raise HTTPException(status_code=400, detail=f"Webhook error: {str(exc)}")
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=webhook_secret,
+        )
+    except ValueError as e:
+        # Invalid payload
+        logger.exception("Invalid payload")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError as e:
+        # Invalid signature
+        logger.exception("Invalid Stripe signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     # Handle the event
-    event_type = event["type"]
-    logger.info("Received Stripe event: %s", event_type)
+    logger.info("Received Stripe event: %s", event["type"])
 
-    if event_type == "payment_intent.succeeded":
+    if event["type"] == "payment_intent.succeeded":
         payment_intent = event["data"]["object"]
-        # Placeholder for order confirmation logic
-        # In a real application you would locate the related booking/order using
-        # metadata (e.g., booking_id) and update its status, send confirmation
-        # emails, etc.
+        # Example: you could retrieve booking_id from metadata if you stored it
+        booking_id = payment_intent.get("metadata", {}).get("booking_id")
         logger.info(
-            "✅ PaymentIntent succeeded: id=%s, amount=%s, currency=%s",
-            payment_intent.get("id"),
-            payment_intent.get("amount"),
-            payment_intent.get("currency"),
+            "PaymentIntent succeeded: %s (amount: %s, booking_id: %s)",
+            payment_intent["id"],
+            payment_intent["amount"],
+            booking_id,
         )
-    elif event_type == "payment_intent.payment_failed":
+        # TODO: Update booking status in your database to 'paid' using booking_id
+    elif event["type"] == "payment_intent.payment_failed":
         payment_intent = event["data"]["object"]
         logger.warning(
-            "❌ PaymentIntent failed: id=%s, reason=%s",
-            payment_intent.get("id"),
-            payment_intent.get("last_payment_error", {}).get("message"),
+            "PaymentIntent failed: %s (amount: %s)",
+            payment_intent["id"],
+            payment_intent["amount"],
         )
-    else:
-        logger.debug("Unhandled Stripe event type: %s", event_type)
+        # TODO: Handle failed payment (e.g., notify user)
 
     # Return a 200 response to acknowledge receipt of the event
-    return {"status": "success"}
+    return Response(status_code=status.HTTP_200_OK)

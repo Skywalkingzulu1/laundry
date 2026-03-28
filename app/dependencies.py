@@ -24,6 +24,13 @@ def get_user(email: str) -> User:
         return User(**public_user_data)
     return None
 
+def get_user_hashed(email: str) -> dict:
+    """
+    Retrieve the raw user dict (including hashed_password) from the in‑memory store.
+    Used internally for authentication where the password hash is required.
+    """
+    return _fake_user_db.get(email)
+
 def add_user(user_create: UserCreate) -> User:
     """
     Add a new user to the in‑memory store.

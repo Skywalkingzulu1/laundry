@@ -1,70 +1,62 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.auth import get_password_hash, verify_password, create_access_token
+from app.auth import create_access_token, verify_password, get_password_hash
+from app.dependencies import get_user
 from app.models import UserCreate, User, Token
-from app.dependencies import _fake_user_db
 
 router = APIRouter()
 
+# Simple in‑memory auto‑increment ID generator
+_user_id_counter = 1
 
 @router.post("/signup", response_model=User, status_code=status.HTTP_201_CREATED)
-async def signup(user: UserCreate):
+async def signup(user_in: UserCreate):
+    """Register a new user.
+    Stores the user in the in‑memory DB with a hashed password.
     """
-    Register a new user.
-
-    - Checks for duplicate email.
-    - Stores the user with a hashed password in the in‑memory store.
-    - Returns the public user representation (without password hash).
-    """
-    if user.email in _fake_user_db:
+    # Check for existing email
+    if get_user(user_in.email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered",
         )
-
-    hashed_password = get_password_hash(user.password)
-    user_id = len(_fake_user_db) + 1
-
-    user_record = {
-        "id": user_id,
-        "email": user.email,
-        "full_name": user.full_name,
-        "role": user.role,
+    global _user_id_counter
+    hashed_password = get_password_hash(user_in.password)
+    user_dict = {
+        "id": _user_id_counter,
+        "email": user_in.email,
+        "full_name": user_in.full_name,
+        "role": user_in.role,
         "is_active": True,
         "hashed_password": hashed_password,
     }
-
-    _fake_user_db[user.email] = user_record
-
-    # Return a User model without the hashed password
-    public_user = {k: v for k, v in user_record.items() if k != "hashed_password"}
-    return User(**public_user)
-
+    # Store in the fake DB defined in dependencies
+    from app.dependencies import _fake_user_db
+    _fake_user_db[user_in.email] = user_dict
+    _user_id_counter += 1
+    # Return public user model (without password)
+    return User(**{k: v for k, v in user_dict.items() if k != "hashed_password"})
 
 @router.post("/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Authenticate user and return a JWT.
+    The OAuth2PasswordRequestForm provides ``username`` (used as email) and ``password``.
     """
-    Authenticate a user and issue a JWT access token.
-
-    The token payload includes:
-    - sub: the user's email
-    - role: the user's role (customer, provider, admin)
-    """
-    user_record = _fake_user_db.get(form_data.username)
-    if not user_record:
+    from app.dependencies import _fake_user_db
+    user_dict = _fake_user_db.get(form_data.username)
+    if not user_dict:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-
-    if not verify_password(form_data.password, user_record["hashed_password"]):
+    if not verify_password(form_data.password, user_dict["hashed_password"]):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-
-    access_token = create_access_token(
-        data={"sub": user_record["email"], "role": user_record["role"]}
-    )
+    # Create JWT with email (sub) and role
+    access_token = create_access_token(data={"sub": user_dict["email"], "role": user_dict["role"]})
     return Token(access_token=access_token)

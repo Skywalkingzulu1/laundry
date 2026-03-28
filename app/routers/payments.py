@@ -1,10 +1,10 @@
 import os
 import logging
-import json
 from typing import Any, Dict, Optional
 
 import stripe
 from fastapi import APIRouter, HTTPException, Request, Depends, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, PositiveInt
 
 from app.dependencies import role_required
@@ -69,14 +69,13 @@ async def create_payment_intent(
     payload: CreatePaymentIntentRequest,
     current_user: User = Depends(role_required("customer")),
 ):
-    """
-    Create a Stripe PaymentIntent and return its client_secret.
+    """Create a Stripe PaymentIntent and return its client_secret.
 
     The optional ``booking_id`` is stored alongside the intent ID so the webhook can
     later associate the successful payment with the correct booking.
     """
     try:
-        # Include booking reference in metadata for later lookup
+        # Merge any provided metadata with booking reference
         metadata = payload.metadata.copy()
         if payload.booking_id:
             metadata["booking_id"] = payload.booking_id
@@ -87,23 +86,17 @@ async def create_payment_intent(
             metadata=metadata,
         )
 
-        # Record intent for later verification
+        # Store intent details for later lookup (e.g., in webhook handling)
         _payment_intent_store[intent.id] = {
-            "user_email": current_user.email,
+            "user_id": current_user.id,
             "booking_id": payload.booking_id,
-            "status": "created",
+            "metadata": metadata,
         }
 
-        logger.info(
-            "Created PaymentIntent %s for user %s (booking_id=%s)",
-            intent.id,
-            current_user.email,
-            payload.booking_id,
-        )
         return PaymentIntentResponse(client_secret=intent.client_secret)
     except Exception as exc:
-        logger.exception("Error creating PaymentIntent")
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.exception("Failed to create payment intent")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
 
 @router.post("/create-checkout-session", response_model=CheckoutSessionResponse)
@@ -111,10 +104,10 @@ async def create_checkout_session(
     payload: CreateCheckoutSessionRequest,
     current_user: User = Depends(role_required("customer")),
 ):
-    """
-    Create a Stripe Checkout Session for one‑time payments.
+    """Create a Stripe Checkout Session and return the redirect URL.
 
-    The session URL is returned to the client which should redirect the user.
+    The session includes the amount, currency and success/cancel URLs supplied by the
+    client. Booking information is stored in metadata for later processing.
     """
     try:
         metadata = payload.metadata.copy()
@@ -139,95 +132,57 @@ async def create_checkout_session(
             metadata=metadata,
         )
 
-        # Store session for later reference (e.g., webhook handling)
         _checkout_session_store[session.id] = {
-            "user_email": current_user.email,
+            "user_id": current_user.id,
             "booking_id": payload.booking_id,
-            "status": "created",
+            "metadata": metadata,
         }
 
-        logger.info(
-            "Created Checkout Session %s for user %s (booking_id=%s)",
-            session.id,
-            current_user.email,
-            payload.booking_id,
-        )
         return CheckoutSessionResponse(url=session.url)
     except Exception as exc:
-        logger.exception("Error creating Checkout Session")
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.exception("Failed to create checkout session")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
 
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
-    """
-    Stripe webhook endpoint.
+    """Handle incoming Stripe webhook events.
 
-    Verifies the signature (if ``STRIPE_WEBHOOK_SECRET`` is set) and processes
-    relevant events such as ``payment_intent.succeeded`` and
-    ``checkout.session.completed``.
+    The endpoint verifies the Stripe signature using the configured webhook secret.
+    It processes ``checkout.session.completed`` and ``payment_intent.succeeded``
+    events, extracting the ``booking_id`` from metadata for further business
+    logic (e.g., marking a booking as paid).
     """
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
+    if not sig_header:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature header")
 
-    # Verify signature if secret is provided
-    if stripe_webhook_secret:
-        try:
-            event = stripe.Webhook.construct_event(
-                payload=payload,
-                sig_header=sig_header,
-                secret=stripe_webhook_secret,
-            )
-        except ValueError as e:
-            # Invalid payload
-            logger.error("Invalid payload: %s", e)
-            raise HTTPException(status_code=400, detail="Invalid payload")
-        except stripe.error.SignatureVerificationError as e:
-            # Invalid signature
-            logger.error("Invalid signature: %s", e)
-            raise HTTPException(status_code=400, detail="Invalid signature")
-    else:
-        # No secret – parse without verification (useful for local testing)
-        try:
-            event = json.loads(payload)
-        except json.JSONDecodeError as e:
-            logger.error("Unable to parse webhook JSON: %s", e)
-            raise HTTPException(status_code=400, detail="Invalid JSON")
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, stripe_webhook_secret
+        )
+    except Exception as e:
+        logger.error(f"Webhook signature verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # -----------------------------------------------------------------------
-    # Event handling
-    # -----------------------------------------------------------------------
-    event_type = event["type"]
-    logger.info("Received Stripe event: %s", event_type)
+    # Handle the event
+    try:
+        if event.type == "checkout.session.completed":
+            session = event.data.object  # type: ignore[attr-defined]
+            booking_id = session.metadata.get("booking_id") if session.metadata else None
+            logger.info(f"Checkout session completed for booking_id={booking_id}")
+            # TODO: Update booking status in DB / trigger downstream actions
+        elif event.type == "payment_intent.succeeded":
+            intent = event.data.object  # type: ignore[attr-defined]
+            booking_id = intent.metadata.get("booking_id") if intent.metadata else None
+            logger.info(f"PaymentIntent succeeded for booking_id={booking_id}")
+            # TODO: Update booking status in DB / trigger downstream actions
+        else:
+            logger.info(f"Unhandled Stripe event type: {event.type}")
+    except Exception as e:
+        logger.exception(f"Error processing Stripe webhook: {e}")
+        raise HTTPException(status_code=500, detail="Webhook handling error")
 
-    if event_type == "payment_intent.succeeded":
-        intent = event["data"]["object"]
-        intent_id = intent["id"]
-        store_entry = _payment_intent_store.get(intent_id)
-        if store_entry:
-            store_entry["status"] = "succeeded"
-            logger.info(
-                "PaymentIntent %s succeeded for user %s (booking_id=%s)",
-                intent_id,
-                store_entry["user_email"],
-                store_entry.get("booking_id"),
-            )
-            # TODO: integrate with booking system (e.g., mark booking as paid)
-
-    elif event_type == "checkout.session.completed":
-        session = event["data"]["object"]
-        session_id = session["id"]
-        store_entry = _checkout_session_store.get(session_id)
-        if store_entry:
-            store_entry["status"] = "completed"
-            logger.info(
-                "Checkout Session %s completed for user %s (booking_id=%s)",
-                session_id,
-                store_entry["user_email"],
-                store_entry.get("booking_id"),
-            )
-            # TODO: integrate with booking system (e.g., confirm booking)
-
-    # Add handling for other events as needed
-    # Return a 2xx response to acknowledge receipt
-    return {"status": "success"}
+    # Return a 200 response to acknowledge receipt of the event
+    return JSONResponse(content={"status": "success"})

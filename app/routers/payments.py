@@ -61,6 +61,19 @@ class CheckoutSessionResponse(BaseModel):
     url: str
 
 
+class RefundRequest(BaseModel):
+    payment_intent_id: Optional[str] = None
+    checkout_session_id: Optional[str] = None
+    amount: Optional[PositiveInt] = None  # amount to refund (in smallest currency unit)
+
+
+class RefundResponse(BaseModel):
+    id: str
+    status: str
+    amount: int
+    currency: str
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -86,17 +99,22 @@ async def create_payment_intent(
             metadata=metadata,
         )
 
-        # Store intent details for later lookup (e.g., in webhook handling)
+        # Store intent details for later reference (e.g., in webhook handling)
         _payment_intent_store[intent.id] = {
-            "user_id": current_user.id,
+            "user_email": current_user.email,
             "booking_id": payload.booking_id,
+            "amount": payload.amount,
+            "currency": payload.currency,
             "metadata": metadata,
         }
 
         return PaymentIntentResponse(client_secret=intent.client_secret)
     except Exception as exc:
         logger.exception("Failed to create payment intent")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
 
 
 @router.post("/create-checkout-session", response_model=CheckoutSessionResponse)
@@ -104,11 +122,7 @@ async def create_checkout_session(
     payload: CreateCheckoutSessionRequest,
     current_user: User = Depends(role_required("customer")),
 ):
-    """Create a Stripe Checkout Session and return the redirect URL.
-
-    The session includes the amount, currency and success/cancel URLs supplied by the
-    client. Booking information is stored in metadata for later processing.
-    """
+    """Create a Stripe Checkout Session and return the redirect URL."""
     try:
         metadata = payload.metadata.copy()
         if payload.booking_id:
@@ -132,57 +146,145 @@ async def create_checkout_session(
             metadata=metadata,
         )
 
+        # Store session details for later reference
         _checkout_session_store[session.id] = {
-            "user_id": current_user.id,
+            "user_email": current_user.email,
             "booking_id": payload.booking_id,
+            "amount": payload.amount,
+            "currency": payload.currency,
             "metadata": metadata,
         }
 
         return CheckoutSessionResponse(url=session.url)
     except Exception as exc:
         logger.exception("Failed to create checkout session")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+
+
+@router.post("/refund", response_model=RefundResponse)
+async def refund_payment(
+    payload: RefundRequest,
+    current_user: User = Depends(role_required("customer")),
+):
+    """Refund a payment either by PaymentIntent ID or Checkout Session ID."""
+    # Determine which identifier is provided
+    if not payload.payment_intent_id and not payload.checkout_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either payment_intent_id or checkout_session_id must be provided.",
+        )
+
+    # Resolve PaymentIntent ID if a Checkout Session ID is supplied
+    payment_intent_id = payload.payment_intent_id
+    if payload.checkout_session_id:
+        session = _checkout_session_store.get(payload.checkout_session_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Checkout session not found.",
+            )
+        # Verify ownership
+        if session["user_email"] != current_user.email:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to refund this payment.",
+            )
+        # Retrieve the PaymentIntent linked to the session
+        try:
+            checkout_session = stripe.checkout.Session.retrieve(payload.checkout_session_id)
+            payment_intent_id = checkout_session.payment_intent
+        except Exception as exc:
+            logger.exception("Failed to retrieve checkout session")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(exc),
+            )
+    else:
+        # Verify ownership for direct PaymentIntent refunds
+        intent_record = _payment_intent_store.get(payment_intent_id)
+        if not intent_record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Payment intent not found.",
+            )
+        if intent_record["user_email"] != current_user.email:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to refund this payment.",
+            )
+
+    # Perform the refund via Stripe
+    try:
+        refund_params: Dict[str, Any] = {"payment_intent": payment_intent_id}
+        if payload.amount:
+            refund_params["amount"] = payload.amount
+        refund = stripe.Refund.create(**refund_params)
+
+        return RefundResponse(
+            id=refund.id,
+            status=refund.status,
+            amount=refund.amount,
+            currency=refund.currency,
+        )
+    except Exception as exc:
+        logger.exception("Refund failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
 
 
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
-    """Handle incoming Stripe webhook events.
-
-    The endpoint verifies the Stripe signature using the configured webhook secret.
-    It processes ``checkout.session.completed`` and ``payment_intent.succeeded``
-    events, extracting the ``booking_id`` from metadata for further business
-    logic (e.g., marking a booking as paid).
-    """
+    """Handle Stripe webhook events securely."""
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
-    if not sig_header:
-        raise HTTPException(status_code=400, detail="Missing Stripe signature header")
+
+    if not stripe_webhook_secret:
+        # If no secret is configured, we cannot verify signatures – reject for safety
+        logger.warning("Stripe webhook secret not configured; rejecting webhook.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Webhook secret not configured.",
+        )
 
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, stripe_webhook_secret
         )
-    except Exception as e:
-        logger.error(f"Webhook signature verification failed: {e}")
+    except ValueError as e:
+        # Invalid payload
+        logger.error(f"Invalid payload: {e}")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError as e:
+        # Invalid signature
+        logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     # Handle the event
     try:
-        if event.type == "checkout.session.completed":
-            session = event.data.object  # type: ignore[attr-defined]
-            booking_id = session.metadata.get("booking_id") if session.metadata else None
-            logger.info(f"Checkout session completed for booking_id={booking_id}")
-            # TODO: Update booking status in DB / trigger downstream actions
-        elif event.type == "payment_intent.succeeded":
-            intent = event.data.object  # type: ignore[attr-defined]
-            booking_id = intent.metadata.get("booking_id") if intent.metadata else None
-            logger.info(f"PaymentIntent succeeded for booking_id={booking_id}")
-            # TODO: Update booking status in DB / trigger downstream actions
+        if event.type == "payment_intent.succeeded":
+            intent = event.data.object  # type: ignore
+            logger.info(f"PaymentIntent succeeded: {intent.id}")
+            # Example: you could update booking status here using intent.metadata.get('booking_id')
+        elif event.type == "checkout.session.completed":
+            session = event.data.object  # type: ignore
+            logger.info(f"Checkout session completed: {session.id}")
+            # Example: update booking using session.metadata.get('booking_id')
+        elif event.type == "charge.refunded":
+            charge = event.data.object  # type: ignore
+            logger.info(f"Charge refunded: {charge.id}")
         else:
-            logger.info(f"Unhandled Stripe event type: {event.type}")
-    except Exception as e:
-        logger.exception(f"Error processing Stripe webhook: {e}")
-        raise HTTPException(status_code=500, detail="Webhook handling error")
+            logger.info(f"Unhandled event type: {event.type}")
+    except Exception as exc:
+        logger.exception("Error processing webhook event")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
 
     # Return a 200 response to acknowledge receipt of the event
     return JSONResponse(content={"status": "success"})

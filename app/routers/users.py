@@ -1,45 +1,48 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.models import UserCreate, User, Token
-from app.dependencies import add_user, get_user_hashed, get_user
-from app.auth import verify_password, create_access_token
+from app.auth import create_access_token, verify_password
+from app.dependencies import add_user, get_user_hashed
+from app.models import UserCreate, Token, User
 
 router = APIRouter()
 
-@router.post("/signup", response_model=User, status_code=status.HTTP_201_CREATED)
-def signup(user_create: UserCreate):
-    """
-    Register a new user. Returns the created user (without password hash).
+@router.post("/signup", response_model=Token)
+async def signup(user: UserCreate):
+    """Register a new user and return a JWT token.
+
+    The password is hashed inside ``add_user``. If the email already exists a
+    ``ValueError`` is raised which we translate to a 400 response.
     """
     try:
-        user = add_user(user_create)
-        return user
+        created_user: User = add_user(user)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc)
+        )
+    access_token = create_access_token(data={"sub": created_user.email, "role": created_user.role})
+    return Token(access_token=access_token)
 
 @router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Authenticate a user and return a JWT token.
+
+    ``OAuth2PasswordRequestForm`` provides ``username`` and ``password`` fields.
+    ``username`` is treated as the user's email.
     """
-    Authenticate a user and return a JWT access token.
-    The OAuth2PasswordRequestForm provides `username` (used as email) and `password`.
-    """
-    # Retrieve the stored user record including the hashed password
-    stored_user = get_user_hashed(form_data.username)
-    if not stored_user:
+    user_dict = get_user_hashed(form_data.username)
+    if not user_dict:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    if not verify_password(form_data.password, stored_user["hashed_password"]):
+    if not verify_password(form_data.password, user_dict["hashed_password"]):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    # Build a public User model for token payload
-    user = get_user(form_data.username)
-    access_token = create_access_token(
-        data={"sub": user.email, "role": user.role}
-    )
+    access_token = create_access_token(data={"sub": user_dict["email"], "role": user_dict["role"]})
     return Token(access_token=access_token)

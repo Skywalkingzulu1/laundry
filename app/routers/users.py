@@ -1,49 +1,40 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
+from app.auth import verify_password, create_access_token
 from app.dependencies import add_user, get_user_hashed
-from app.auth import create_access_token, verify_password
-from app.models import UserCreate, User, Token
+from app.models import UserCreate, Token, User
 
 router = APIRouter()
 
-
-@router.post(
-    "/register",
-    response_model=User,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register a new user",
-    description="Create a new user account with a hashed password and store it in the in‑memory store.",
-)
-async def register(user: UserCreate):
-    """
-    Register a new user.
-    """
+@router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+async def register_user(user: UserCreate):
+    """Create a new user with a hashed password.
+    Returns the public User model (without password hash)."""
     try:
-        new_user = add_user(user)
-        return new_user
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        created_user = add_user(user)
+        return created_user
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-
-@router.post(
-    "/login",
-    response_model=Token,
-    summary="User login",
-    description="Authenticate a user and return a JWT access token containing the user's email and role.",
-)
+@router.post("/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    """
-    Authenticate user and return JWT token.
-    """
-    # OAuth2PasswordRequestForm uses `username` field for the identifier; we treat it as email.
-    user_dict = get_user_hashed(form_data.username)
-    if not user_dict:
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
-    if not verify_password(form_data.password, user_dict["hashed_password"]):
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
-
-    access_token = create_access_token(
-        data={"sub": user_dict["email"], "role": user_dict["role"]}
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+    """Authenticate a user and return a JWT access token.
+    The OAuth2PasswordRequestForm provides 'username' (email) and 'password'."""
+    user_record = get_user_hashed(form_data.username)
+    if not user_record:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not verify_password(form_data.password, user_record["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # Create JWT token containing email (as sub) and role
+    token_data = {"sub": user_record["email"], "role": user_record["role"]}
+    access_token = create_access_token(data=token_data)
+    return Token(access_token=access_token)

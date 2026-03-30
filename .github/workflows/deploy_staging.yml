@@ -1,0 +1,57 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/laundry:staging
+
+      - name: Deploy to Staging Server
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          SSH_HOST: ${{ secrets.STAGING_HOST }}
+          SSH_USER: ${{ secrets.STAGING_USER }}
+          IMAGE_TAG: ${{ secrets.DOCKER_USERNAME }}/laundry:staging
+        run: |
+          echo "$SSH_PRIVATE_KEY" > key.pem
+          chmod 600 key.pem
+          ssh -o StrictHostKeyChecking=no -i key.pem $SSH_USER@$SSH_HOST << 'EOF'
+            docker pull $IMAGE_TAG
+            docker stop laundry-staging || true
+            docker rm laundry-staging || true
+            docker run -d --name laundry-staging -p 8000:8000 $IMAGE_TAG
+          EOF
+
+      - name: Verify Deployment
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          # Wait for the container to start
+          sleep 10
+          # Perform health check
+          curl -f http://$STAGING_HOST:8000/health || exit 1

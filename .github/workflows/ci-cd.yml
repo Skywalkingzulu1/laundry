@@ -1,0 +1,52 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: '3.11'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pytest --maxfail=1 --disable-warnings -q
+
+      - name: Build Docker image (optional)
+        if: success()
+        run: |
+          docker build -t laundry-api:staging .
+
+      - name: Deploy to Staging Environment
+        if: success()
+        env:
+          STAGING_SERVER: ${{ secrets.STAGING_SERVER }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_KEY: ${{ secrets.STAGING_KEY }}
+        run: |
+          echo "Deploying to staging..."
+          # Example deployment using SSH and Docker
+          ssh -o StrictHostKeyChecking=no -i ${{ secrets.STAGING_KEY }} ${{ env.STAGING_USER }}@${{ env.STAGING_SERVER }} << 'EOF'
+            docker pull myregistry.com/laundry-api:latest || true
+            docker stop laundry-api || true
+            docker rm laundry-api || true
+            docker run -d --name laundry-api -p 8000:8000 myregistry.com/laundry-api:latest
+          EOF

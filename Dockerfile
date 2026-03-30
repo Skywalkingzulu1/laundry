@@ -5,18 +5,25 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Set work directory.
+# Install system dependencies.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user and set work directory.
+RUN useradd -m appuser
 WORKDIR /app
+USER appuser
 
-# Install system dependencies (if any) and then Python dependencies.
-# For this simple FastAPI app, only Python packages are required.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies.
+COPY --chown=appuser:appuser requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code.
-COPY . .
+# Copy application code.
+COPY --chown=appuser:appuser . .
 
-# Expose the port that uvicorn will run on.
+# Expose the port FastAPI will run on.
 EXPOSE 8000
 
 # Command to run the FastAPI application.

@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: laundrypool-deployment
+  labels:
+    app: laundrypool
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: laundrypool
+  template:
+    metadata:
+      labels:
+        app: laundrypool
+    spec:
+      containers:
+        - name: laundrypool
+          image: your-docker-registry/laundrypool:latest
+          ports:
+            - containerPort: 80
+          envFrom:
+            - secretRef:
+                name: laundrypool-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20

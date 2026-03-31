@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Service for LaundryPool API with ALB and Auto Scaling
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where resources will be deployed
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the ECS service (at least two)
+  ClusterName:
+    Type: String
+    Default: laundry-cluster
+    Description: Name of the ECS cluster
+  DesiredCount:
+    Type: Number
+    Default: 2
+    Description: Desired number of tasks
+  ExecutionRoleArn:
+    Type: String
+    Description: ARN of the ECS task execution role
+  TaskRoleArn:
+    Type: String
+    Description: ARN of the ECS task role
+  ECRRepositoryUri:
+    Type: String
+    Description: URI of the Docker image in ECR
+
+Resources:
+  LaundryCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  LaundryTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: laundry-app
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: laundry-api
+          Image: !Sub '${ECRRepositoryUri}:latest'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          Environment:
+            - Name: ENV
+              Value: production
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/laundry
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  LaundryLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: laundry-alb
+      Subnets: !Ref SubnetIds
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups: []
+
+  LaundryTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: laundry-tg
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      Matcher:
+        HttpCode: 200
+
+  LaundryListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LaundryLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref LaundryTargetGroup
+
+  LaundryService:
+    Type: AWS::ECS::Service
+    DependsOn: LaundryListener
+    Properties:
+      Cluster: !Ref LaundryCluster
+      ServiceName: laundry-service
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref SubnetIds
+          AssignPublicIp: ENABLED
+      TaskDefinition: !Ref LaundryTaskDefinition
+      LoadBalancers:
+        - TargetGroupArn: !Ref LaundryTargetGroup
+          ContainerName: laundry-api
+          ContainerPort: 80
+
+  LaundryScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 2
+      ResourceId: !Sub 'service/${LaundryCluster}/${LaundryService}'
+      RoleARN: !Ref ExecutionRoleArn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  LaundryScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: laundry-cpu-target-tracking
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref LaundryScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+Outputs:
+  LoadBalancerDNS:
+    Description: DNS name of the load balancer
+    Value: !GetAtt LaundryLoadBalancer.DNSName

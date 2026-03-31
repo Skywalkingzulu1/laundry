@@ -1,0 +1,39 @@
+{
+  "family": "laundry-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "${ExecutionRoleArn}",
+  "taskRoleArn": "${TaskRoleArn}",
+  "containerDefinitions": [
+    {
+      "name": "laundry-api",
+      "image": "${ECRRepositoryUri}:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "hostPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ENV",
+          "value": "production"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/laundry",
+          "awslogs-region": "${AWS::Region}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

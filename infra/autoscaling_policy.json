@@ -1,0 +1,12 @@
+{
+  "PolicyName": "laundry-cpu-target-tracking",
+  "PolicyType": "TargetTrackingScaling",
+  "TargetTrackingScalingPolicyConfiguration": {
+    "TargetValue": 50.0,
+    "PredefinedMetricSpecification": {
+      "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
+    },
+    "ScaleInCooldown": 60,
+    "ScaleOutCooldown": 60
+  }
+}
